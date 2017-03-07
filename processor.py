@@ -5,16 +5,59 @@ import cv2
 import os
 import glob
 import pickle
+from collections import deque
+
 
 class Line:
-    def __init__(self):
+    def __init__(self, madx3):
         self.detected = None
-        pass
+        # How many xfit values from the past to keep
+        self.depth = 4
+        self.last_fits = deque([])
+        self.mean_fit = None
+        self.madx3 = madx3
+        self.curvature = None
+        self.ym_per_pix = 30/720 
+        self.xm_per_pix = 3.7/700
+    
+    def curve(self, fitx, ploty):
+
+        fit = np.polyfit(ploty * self.ym_per_pix, fitx * self.xm_per_pix, 2)
+        y = np.max(ploty) * self.ym_per_pix
+        a = fit[0]
+        b = fit[1]
+        curve = np.power(1 + np.square(2*a*y +b), 1.5)/(2*np.abs(a))
+        return curve        
+    
+    def update(self, xfit, ploty):
+        self.last_fits.append(xfit)
+        if len(self.last_fits) > self.depth:
+            self.last_fits.popleft()
+        self.mean_fit = np.mean(np.array(self.last_fits), axis = 0)
+        self.detected = True
+        self.curvature = self.curve(xfit, ploty)
+
+    def diff(self, xfit):
+        n_fits = len(self.last_fits)
+        if n_fits > 0:
+            last_fit = self.last_fits[n_fits -1]
+            d = np.sum(last_fit - xfit)
+            if d < self.madx3:
+                accept = True
+            else:
+                accept = False
+        else:
+            # In case of first fit
+            d = 0
+            accept = True
+        return accept, d
+        
+
 
 class FrameProcessor:
     def __init__(self, calib_dir = 'camera_cal/', nx = 9, ny = 6):
-        self.left = Line()
-        self.right = Line()
+        self.left = Line(madx3 = 7143.995)
+        self.right = Line(madx3 = 11121.39)
         self.calib_dir = calib_dir
         self.nx = nx
         self.ny = ny
@@ -25,8 +68,6 @@ class FrameProcessor:
         self.xsize = None
         self.ysize = None
         self.Minv = None
-        self.ym_per_pix = 30/720 
-        self.xm_per_pix = 3.7/700
         self.log = []
         #Processed frames counter
         self.counter = 0
@@ -239,14 +280,6 @@ class FrameProcessor:
         out = a * np.square(y) + b * y +c
         return out
 
-    def curve(self, fitx, ploty):
-        fit = np.polyfit(ploty * self.ym_per_pix, fitx * self.xm_per_pix, 2)
-        y = np.max(ploty) * self.ym_per_pix
-        a = fit[0]
-        b = fit[1]
-        curve = np.power(1 + np.square(2*a*y +b), 1.5)/(2*np.abs(a))
-        return curve
-
     def plot_all(self, warped, undist, left_fitx, right_fitx, ploty):
         warp_zero = np.zeros_like(warped).astype(np.uint8)
         color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
@@ -259,20 +292,10 @@ class FrameProcessor:
         return result
     
     def sanity(self, img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids):
-        def calc_diff(line, xfit):
-            if line.detected:
-                diff = np.sum(np.abs(line.xfit - xfit))
-            else:
-                diff = None
-            return diff
-
-        left_diff = calc_diff(self.left, left_fitx)
-        right_diff = calc_diff(self.right, right_fitx)
-        self.left.detected = True
-        self.right.detected = True
-        self.left.xfit = left_fitx
-        self.right.xfit = right_fitx
-
+        
+        ld_accept, left_diff = self.left.diff(left_fitx)
+        rd_accept, right_diff = self.right.diff(right_fitx)
+                
         cent_thresh = 4
         n_left_cent = len(left_centroids)
         n_right_cent = len(right_centroids)
@@ -285,8 +308,8 @@ class FrameProcessor:
         left_fit[0], left_fit[1], left_fit[2], 
         right_fit[0], right_fit[1], right_fit[2],
         n_left_cent, n_right_cent))
-        
-        return True
+        result = ld_accept & rd_accept        
+        return result
         
     def process(self, img):
         self.xsize = img.shape[1]
@@ -300,18 +323,23 @@ class FrameProcessor:
         left_fitx = self.quadratic(left_fit, ploty)
         right_fitx = self.quadratic(right_fit, ploty)
 
-        left_curve = self.curve(left_fitx, ploty)
-        right_curve = self.curve(right_fitx, ploty)
-        _ = self.sanity(img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids)
+        sanity = self.sanity(img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids)
+        
+        if sanity:
+            self.left.update(left_fitx, ploty)
+            self.right.update(right_fitx, ploty)
+        else:
+            left_fitx = self.left.mean_fit
+            right_fitx = self.right.mean_fit
 
         out = self.plot_all(warped, undist, left_fitx, right_fitx, ploty)
-        curv_txt = "Curvature: {:6.0f}m`".format(left_curve)
+        curv_txt = "Curvature: {:6.0f}m`".format(self.left.curvature)
         font = cv2.FONT_HERSHEY_SIMPLEX
         cv2.putText(out, curv_txt, (10, 40), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
 
         lane_center = left_fitx[-1] + (right_fitx[-1] - left_fitx[-1]) / 2
         car_center = np.int(self.xsize/2)
-        deviation = (car_center - lane_center) * self.xm_per_pix
+        deviation = (car_center - lane_center) * self.left.xm_per_pix
         dev_txt = "Deviation from lane center: {:4.2f}".format(deviation)
         cv2.putText(out, dev_txt, (int(self.xsize/2), 40), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
         
