@@ -12,13 +12,18 @@ class Line:
     def __init__(self, madx3):
         self.detected = None
         # How many xfit values from the past to keep
-        self.depth = 4
+        self.depth = 12
         self.last_fits = deque([])
         self.mean_fit = None
         self.madx3 = madx3
         self.curvature = None
         self.ym_per_pix = 30/720 
         self.xm_per_pix = 3.7/700
+        # number of frames which could be substituted in case of bad checkup
+        # i.e MAD tests
+        self.nd_limit = 10
+        # Non detected counter
+        self.nd = 0
     
     def curve(self, fitx, ploty):
 
@@ -37,21 +42,22 @@ class Line:
         self.detected = True
         self.curvature = self.curve(xfit, ploty)
 
-    def diff(self, xfit):
+    def diff(self, xfit, ploty):
         n_fits = len(self.last_fits)
         if n_fits > 0:
             last_fit = self.last_fits[n_fits -1]
             d = np.sum(last_fit - xfit)
-            if d < self.madx3:
-                accept = True
+            if np.abs(d) < self.madx3:
+                self.update(xfit, ploty)
+            elif self.nd == self.nd_limit:
+                self.update(xfit, ploty)
             else:
-                accept = False
+                self.nd += 1
+                self.detected = False    
         else:
             # In case of first fit
-            d = 0
-            accept = True
-        return accept, d
-        
+           self.update(xfit, ploty)
+
 
 
 class FrameProcessor:
@@ -69,6 +75,7 @@ class FrameProcessor:
         self.ysize = None
         self.Minv = None
         self.log = []
+        self.ploty = None
         #Processed frames counter
         self.counter = 0
         try:
@@ -100,22 +107,12 @@ class FrameProcessor:
             with open('calibration.pickle', 'wb') as calib_file:
                 pickle.dump([ret, mtx, dist, rvecs, tvecs], calib_file)
    
-    def beye1(self, img):
-        bottom_dx = self.xsize * 0.05
-        top_dx = self.xsize * 0.4
-        top_y = self.ysize * 2/3
-        # source points - start from bottom left, clockiwse
-        s1 = (bottom_dx, self.ysize)
-        s2 = (top_dx, top_y)
-        s3 = (self.xsize-top_dx, top_y)
-        s4 = (self.xsize-bottom_dx, self.ysize)
-        
-        d1 = (0, self.ysize)
-        d2 = (0, 0)
-        d3 = (self.xsize, 0)
-        d4 = (self.xsize, self.ysize)
-        src = np.float32([s1, s2, s3, s4])
-        dst = np.float32([d1, d2, d3, d4])
+    def beye(self, img):
+        src = np.float32([[self.xsize // 2 - 76, self.ysize * .625], 
+        [self.xsize // 2 + 76, self.ysize * .625],
+        [-100, self.ysize], [self.xsize + 100, self.ysize]])
+        dst = np.float32([[100, 0], [self.xsize - 100, 0], [100, self.ysize], 
+        [self.xsize - 100, self.ysize]])   
         M = cv2.getPerspectiveTransform(src, dst)
         self.Minv = cv2.getPerspectiveTransform(dst, src) 
         warped = cv2.warpPerspective(img, M, (self.xsize, self.ysize))
@@ -132,7 +129,7 @@ class FrameProcessor:
         binary_output = self.threshold(gradmag, thresh)
         return binary_output
 
-    def abs_sobel_thresh(self, img, thresh, orient='x'):
+    def abs_sobel_thresh(self, img, thresh, orient='x', sobel_kernel=3):
         # Apply x or y gradient with the OpenCV Sobel() function
         # and take the absolute value
         if orient == 'x':
@@ -157,44 +154,29 @@ class FrameProcessor:
         return binary_output
 
     def threshold(self, img, thresh):
-        binary_output =  np.zeros_like(img)
+        binary_output =  np.zeros_like(img, dtype = np.uint8)
         binary_output[(img >= thresh[0]) & (img <= thresh[1])] = 1
         return binary_output
 
     def pipe(self, img):
         undist = cv2.undistort(img, self.mtx, self.dist, None, self.mtx)
-        birds_eye = self.beye1(undist)
+        birds_eye = self.beye(undist)
         hsv = cv2.cvtColor(birds_eye, cv2.COLOR_RGB2HSV)
-        yellow_hsv_low  = np.array([ 0,  100,  100])
-        yellow_hsv_high = np.array([ 80, 255, 255])
-        yellow = cv2.inRange(hsv, yellow_hsv_low, yellow_hsv_high)
-            
-        white_hsv_low  = np.array([ 0,   0,   120])
-        white_hsv_high = np.array([ 255,  80, 255])
-        white = cv2.inRange(hsv, white_hsv_low, white_hsv_high)
-            
-        yellow_white = cv2.bitwise_or(white, yellow)
+        
         gray = cv2.cvtColor(birds_eye, cv2.COLOR_BGR2GRAY)
         hls = cv2.cvtColor(birds_eye, cv2.COLOR_BGR2HLS)
         s_channel = hls[:,:,2]
-        dsx = self.abs_sobel_thresh(gray, (20, 140), orient = 'x')
-        mag = self.mag_thresh(s_channel, sobel_kernel = 5, thresh= (30, 100))
-        s_threshold = self.threshold(s_channel, (180, 255))
-        out = np.logical_or(dsx, s_threshold)
-        return out, undist, birds_eye
 
-    def analyze(self, img):
-        undist = cv2.undistort(img, self.mtx, self.dist, None, self.mtx)
-        birds_eye = self.beye1(undist)
-        gray = cv2.cvtColor(birds_eye, cv2.COLOR_BGR2GRAY)
-        hls = cv2.cvtColor(birds_eye, cv2.COLOR_BGR2HLS)
-        s_channel = hls[:,:,2]
-        dsx = self.abs_sobel_thresh(s_channel, (20, 100), orient = 'x')
-        s_threshold = self.threshold(s_channel, (180, 255))
-        dsy = self.abs_sobel_thresh(s_channel, (20, 100), orient = 'y')
-        mag = self.mag_thresh(s_channel, sobel_kernel = 5, thresh= (30, 100))
-        ang = self.dir_threshold(s_channel, sobel_kernel = 15, thresh = (0.7, 1.3))
-        return hls, s_threshold, dsx, dsy, mag, ang
+        deshadow_r = self.threshold(birds_eye[:,:,0], (120, 255))
+        deshadow_g = self.threshold(birds_eye[:,:,1], (120, 255))
+        deshadow_b = self.threshold(birds_eye[:,:,2], (120, 255))
+        deshadow = np.bitwise_or(deshadow_r, deshadow_g, deshadow_b)
+    
+        dsx = self.abs_sobel_thresh(gray, (20, 100), orient = 'x')
+        mag = self.mag_thresh(s_channel, sobel_kernel = 5, thresh= (20, 100))
+        s_threshold = self.threshold(s_channel, (170, 255))
+        out = np.bitwise_and(np.bitwise_or(dsx, s_threshold, mag), deshadow)
+        return out, undist, birds_eye
 
 
     def slide(self, warped):
@@ -273,18 +255,19 @@ class FrameProcessor:
         right_fit = np.polyfit(right_centroids[:, 1], right_centroids[:, 0], 2)
         return left_fit, right_fit, left_centroids, right_centroids
     
-    def quadratic(self, fit, y):
+    def quadratic(self, fit):
+        y = self.ploty
         a = fit[0]
         b = fit[1]
         c = fit[2]
         out = a * np.square(y) + b * y +c
         return out
 
-    def plot_all(self, warped, undist, left_fitx, right_fitx, ploty):
+    def plot_all(self, warped, undist, left_fitx, right_fitx):
         warp_zero = np.zeros_like(warped).astype(np.uint8)
         color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
-        pts_left = np.array([np.transpose(np.vstack([left_fitx, ploty]))])
-        pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, ploty])))])
+        pts_left = np.array([np.transpose(np.vstack([left_fitx, self.ploty]))])
+        pts_right = np.array([np.flipud(np.transpose(np.vstack([right_fitx, self.ploty])))])
         pts = np.hstack((pts_left, pts_right))
         cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 255))
         newwarp = cv2.warpPerspective(color_warp, self.Minv, (self.xsize, self.ysize))
@@ -293,8 +276,8 @@ class FrameProcessor:
     
     def sanity(self, img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids):
         
-        ld_accept, left_diff = self.left.diff(left_fitx)
-        rd_accept, right_diff = self.right.diff(right_fitx)
+        left_diff = self.left.diff(left_fitx, self.ploty)
+        right_diff = self.right.diff(right_fitx, self.ploty)
                 
         cent_thresh = 4
         n_left_cent = len(left_centroids)
@@ -308,8 +291,7 @@ class FrameProcessor:
         left_fit[0], left_fit[1], left_fit[2], 
         right_fit[0], right_fit[1], right_fit[2],
         n_left_cent, n_right_cent))
-        result = ld_accept & rd_accept        
-        return result
+        
         
     def process(self, img):
         self.xsize = img.shape[1]
@@ -318,22 +300,16 @@ class FrameProcessor:
         warped, undist, birds_eye = self.pipe(img)
         left_fit, right_fit, left_centroids, right_centroids = self.slide(warped)
         
-        ploty = np.linspace(0, self.ysize-1, self.ysize )
+        if self.ploty is None:
+            self.ploty = np.linspace(0, self.ysize-1, self.ysize )
         
-        left_fitx = self.quadratic(left_fit, ploty)
-        right_fitx = self.quadratic(right_fit, ploty)
+        left_fitx = self.quadratic(left_fit)
+        right_fitx = self.quadratic(right_fit)
 
-        sanity = self.sanity(img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids)
-        
-        if sanity:
-            self.left.update(left_fitx, ploty)
-            self.right.update(right_fitx, ploty)
-        else:
-            left_fitx = self.left.mean_fit
-            right_fitx = self.right.mean_fit
+        self.sanity(img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids)
 
-        out = self.plot_all(warped, undist, left_fitx, right_fitx, ploty)
-        curv_txt = "Curvature: {:6.0f}m`".format(self.left.curvature)
+        out = self.plot_all(warped, undist, self.left.mean_fit, self.right.mean_fit)
+        curv_txt = "Curvature: {:6.0f}m".format(self.left.curvature)
         font = cv2.FONT_HERSHEY_SIMPLEX
         cv2.putText(out, curv_txt, (10, 40), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
 
@@ -342,5 +318,5 @@ class FrameProcessor:
         deviation = (car_center - lane_center) * self.left.xm_per_pix
         dev_txt = "Deviation from lane center: {:4.2f}".format(deviation)
         cv2.putText(out, dev_txt, (int(self.xsize/2), 40), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
-        
         return out
+       
