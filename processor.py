@@ -39,6 +39,7 @@ class Line:
         if len(self.last_fits) > self.depth:
             self.last_fits.popleft()
         self.mean_fit = np.mean(np.array(self.last_fits), axis = 0)
+        self.mean_fit = np.int32(self.mean_fit)
         self.detected = True
         self.curvature = self.curve(xfit, ploty)
 
@@ -260,10 +261,10 @@ class FrameProcessor:
         a = fit[0]
         b = fit[1]
         c = fit[2]
-        out = a * np.square(y) + b * y +c
+        out = a * np.square(y) + b * y + c
         return out
 
-    def plot_all(self, warped, undist, left_fitx, right_fitx):
+    def plot_all(self, warped, undist, birds_eye, left_fitx, right_fitx, left_centroids, right_centroids):
         warp_zero = np.zeros_like(warped).astype(np.uint8)
         color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
         pts_left = np.array([np.transpose(np.vstack([left_fitx, self.ploty]))])
@@ -271,6 +272,27 @@ class FrameProcessor:
         pts = np.hstack((pts_left, pts_right))
         cv2.fillPoly(color_warp, np.int_([pts]), (0, 255, 255))
         newwarp = cv2.warpPerspective(color_warp, self.Minv, (self.xsize, self.ysize))
+        
+        mini_x = self.xsize//3
+        mini_y = self.ysize//3
+        mini_be = cv2.resize(birds_eye, (mini_x, mini_y), interpolation=cv2.INTER_AREA)
+        
+        mini_fit = np.copy(warped)
+        mini_fit[mini_fit == 1] = 255
+        mini_fit = np.dstack((mini_fit, mini_fit, mini_fit))
+
+        for y in range(self.ysize):
+            mini_fit = cv2.circle(mini_fit, (left_fitx[y], y), 3, (0, 255, 0 ), -1)
+            mini_fit = cv2.circle(mini_fit, (right_fitx[y], y), 3, (0, 255, 0 ), -1)
+        for point in left_centroids:
+            mini_fit = cv2.circle(mini_fit, tuple(np.int32(point)), 15, (255, 0,0 ), -1)
+        for point in right_centroids:
+            mini_fit = cv2.circle(mini_fit, tuple(np.int32(point)), 15, (255, 0,0 ), -1)
+        
+        mini_fit = cv2.resize(mini_fit, (mini_x, mini_y), interpolation=cv2.INTER_AREA)
+
+        undist[0:mini_y, 0:mini_x, :] = mini_be
+        undist[0:mini_y, mini_x:2*mini_x] = mini_fit
         result = cv2.addWeighted(undist, 1, newwarp, 0.3, 0)
         return result
     
@@ -308,15 +330,16 @@ class FrameProcessor:
 
         self.sanity(img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids)
 
-        out = self.plot_all(warped, undist, self.left.mean_fit, self.right.mean_fit)
+        out = self.plot_all(warped, undist, birds_eye, self.left.mean_fit, self.right.mean_fit,
+        left_centroids, right_centroids)
         curv_txt = "Curvature: {:6.0f}m".format(self.left.curvature)
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(out, curv_txt, (10, 40), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
+        cv2.putText(out, curv_txt, (10, 280), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
 
         lane_center = left_fitx[-1] + (right_fitx[-1] - left_fitx[-1]) / 2
         car_center = np.int(self.xsize/2)
         deviation = (car_center - lane_center) * self.left.xm_per_pix
         dev_txt = "Deviation from lane center: {:4.2f}".format(deviation)
-        cv2.putText(out, dev_txt, (int(self.xsize/2), 40), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
+        cv2.putText(out, dev_txt, (int(self.xsize/2), 280), font, 1, (255, 255, 255), 2, cv2.LINE_AA )
         return out
        
