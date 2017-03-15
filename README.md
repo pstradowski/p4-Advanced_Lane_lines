@@ -114,8 +114,8 @@ Left and right lane detections have totally different characteristics, this is c
 To determine if new line is good, I subtracted x values of last good fit, then used MAD (Median Absolute Deviation) to check for outliers.
 An example of distance distribution for left and right lane is shown below.
 
-![Left](output_images/left_lane_distribution.svg)
-![Right](output_images/Right_lane_distribution.svg)
+![Left](output_images/left_lane_distribution.png)
+![Right](output_images/Right_lane_distribution.png)
 
 In case of failure, the new line is discarded during maximum 8 frames. After 8 frames, algorithm will consider new line as valid.
 
