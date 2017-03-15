@@ -115,7 +115,11 @@ To determine if new line is good, I subtracted x values of last good fit, then u
 An example of distance distribution for left and right lane is shown below.
 
 ![Left](output_images/left_lane_distribution.png)
+<<<<<<< HEAD
 ![Right](output_images/right_lane_distribution.png)
+=======
+![Right](output_images/Right_lane_distribution.png)
+>>>>>>> e0e577d7b4a389b2bc10eeeccb8cccd312d9bebc
 
 In case of failure, the new line is discarded during maximum 8 frames. After 8 frames, algorithm will consider new line as valid.
 
