@@ -24,17 +24,11 @@ Project files contains 20  pictures of a 9x6 chessboard located in directory *ca
 ### 1.2. Calibration algorithm
 I use standard open CV function cv2.calibrateCamera - it requires 2 lists of positions of points: in real world and reference points on a image. I compute a position of corners in real world and store it in obp variable - this value is the same for all pictures, then for each picture I find corners and use them together with obp to calibrate camera. See below for an example of image undistorted using this algorithm.
 
-
-
-
-![png](output_images/output5_0.png)
-
+![png](output_images/output_5_0.png)
 
 Algorithm applied to one of test pictures:
 
-
-
-![png](output_images/output7_0.png)
+![png](output_images/output_7_0.png)
 
 
 ## 2. Perspective transformation
@@ -44,7 +38,7 @@ Algorithm applied to one of test pictures:
   
   An example of the transform is shown below:
 
-![png](output_images/output9_0.png)
+![png](output_images/output_9_0.png)
 
 
 ## 3. Image thresholding
@@ -70,11 +64,11 @@ An example of analytic information from last iteration is shown below.
 
 
 
-![png](output_images/output12_0.png)
+![png](output_images/output_12_0.png)
 
-![png](output_images/output12_1.png)
+![png](output_images/output_12_1.png)
 
-![png](output_images/output12_2.png)
+![png](output_images/output_12_2.png)
 
 
 ## 4. Processing pipeline
@@ -90,7 +84,7 @@ In my code all above operations are done by the method **pipe** of the **FramePr
 
 See an example below:
 
-![png](output_images/output15_0.png)
+![png](output_images/output_15_0.png)
 
 
 ## 5. Lane finding and curve fitting
@@ -98,7 +92,7 @@ See an example below:
 I decided to use convolution based method, wit modeification to avoid fonding centroids in empty spaces. For left and lright centroids, I used a threshold for convolution values to check if it shoudl be included in the centroid list. The resulting centrold list has variable length - instead for "empty" centroids, I do not store their values, because they disturb curve fitting.
 An example of usage is shown below - we split the image into 9 layers, but for the right lane there are only 6 centroids (red squares) available. In my FrameProcessor class these operations are done within  the method **slide** of the **FrameProcessor class**.
 
-![png](output_images/output17_1.png)
+![png](output_images/output_17_1.png)
 
 ## 6 Final picture
 
@@ -110,7 +104,7 @@ Final frame contains following elements:
   * Birdseye view
   * Centroids found and fitted lines
 
-![png](output_images/output19_1.png)
+![png](output_images/output_19_1.png)
 
 ## 7. Sanity checks and smoothing
 
