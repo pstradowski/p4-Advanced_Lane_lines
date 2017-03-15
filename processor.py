@@ -9,6 +9,14 @@ from collections import deque
 
 
 class Line:
+    """
+    Class to hold line parameters, there will be separate instances for 
+    left and right line. 
+    Methods:
+    curve - calculate curvature
+    update - in case of sucessfull fit update all necessary parameters
+    diff - calculate new fit difference and decide if it's OK or not using MAD outliers detection
+    """
     def __init__(self, madx3):
         self.detected = None
         # How many xfit values from the past to keep
@@ -62,6 +70,11 @@ class Line:
 
 
 class FrameProcessor:
+    """ 
+    Main calss to deal with incoming video frames
+    An entry point is in the process method and
+
+    """
     def __init__(self, calib_dir = 'camera_cal/', nx = 9, ny = 6):
         self.left = Line(madx3 = 7143.995)
         self.right = Line(madx3 = 11121.39)
@@ -86,6 +99,9 @@ class FrameProcessor:
             self.calibrate()
                 
     def calibrate(self):
+        """
+        Perform camera calibration using provided chessboard pictures
+        """
         obp = np.zeros((self.nx*self.ny, 3), np.float32)
         obp[:, :2] = np.mgrid[0:self.nx, 0:self.ny].T.reshape(-1, 2)
         objpoints = []
@@ -109,6 +125,10 @@ class FrameProcessor:
                 pickle.dump([ret, mtx, dist, rvecs, tvecs], calib_file)
    
     def beye(self, img):
+"""
+    Bird's eye transform
+"""
+
         src = np.float32([[self.xsize // 2 - 76, self.ysize * .625], 
         [self.xsize // 2 + 76, self.ysize * .625],
         [-100, self.ysize], [self.xsize + 100, self.ysize]])
@@ -118,6 +138,11 @@ class FrameProcessor:
         self.Minv = cv2.getPerspectiveTransform(dst, src) 
         warped = cv2.warpPerspective(img, M, (self.xsize, self.ysize))
         return warped
+
+"""
+Block of methods to support various image thresholds and transforms 
+in order to find best representation to find lane lines
+"""
 
     def mag_thresh(self, img, sobel_kernel=3, thresh=(0, 255)):
         sobelx = cv2.Sobel(img, cv2.CV_64F, 1, 0, ksize=sobel_kernel)
@@ -178,7 +203,9 @@ class FrameProcessor:
         s_threshold = self.threshold(s_channel, (170, 255))
         out = np.bitwise_and(np.bitwise_or(dsx, s_threshold, mag), deshadow)
         return out, undist, birds_eye
-
+"""
+        Sliding window seaarch for lanes using convolutions
+"""
 
     def slide(self, warped):
         x_middle = np.int(np.round(self.xsize/2))
@@ -257,6 +284,7 @@ class FrameProcessor:
         return left_fit, right_fit, left_centroids, right_centroids
     
     def quadratic(self, fit):
+        # quadratic function
         y = self.ploty
         a = fit[0]
         b = fit[1]
@@ -265,6 +293,10 @@ class FrameProcessor:
         return out
 
     def plot_all(self, warped, undist, birds_eye, left_fitx, right_fitx, left_centroids, right_centroids):
+"""
+        This methods does all plotting on the frame, except for curvature and
+        distance from lince center
+"""
         warp_zero = np.zeros_like(warped).astype(np.uint8)
         color_warp = np.dstack((warp_zero, warp_zero, warp_zero))
         pts_left = np.array([np.transpose(np.vstack([left_fitx, self.ploty]))])
@@ -297,6 +329,11 @@ class FrameProcessor:
         return result
     
     def sanity(self, img, left_fit, right_fit, left_fitx, right_fitx, left_centroids, right_centroids):
+        """
+        Sanity checker - it calls diff method for every Line
+        additionally does some logging to gather analytic data
+
+        """
         
         left_diff = self.left.diff(left_fitx, self.ploty)
         right_diff = self.right.diff(right_fitx, self.ploty)
@@ -316,6 +353,11 @@ class FrameProcessor:
         
         
     def process(self, img):
+
+"""
+        Main entry for the class - it returns a frame with all necessary 
+        information plotted on it.
+"""        
         self.xsize = img.shape[1]
         self.ysize = img.shape[0]
         self.counter += 1
